@@ -116,7 +116,7 @@ LZMA_CRC32:
 	 * code on Windows.
 	 */
 #if (!defined(PIC) && !defined(__PIC__)) \
-		|| (defined(_WIN32) || defined(__CYGWIN__))
+		|| (defined(_WIN32) || defined(__CYGWIN__) || defined(__OS2__))
 	/* Not PIC */
 	movl	$LZMA_CRC32_TABLE, %ebx
 #elif defined(__MACH__)
