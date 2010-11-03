@@ -22,6 +22,10 @@
 #	endif
 #	include <windows.h>
 
+#elif defined(__KLIBC__)
+#	define INCL_DOS
+#	include <os2.h>
+
 #elif defined(HAVE_PHYSMEM_SYSCONF)
 #	include <unistd.h>
 
@@ -78,6 +82,12 @@ physmem(void)
 		GlobalMemoryStatus(&meminfo);
 		ret = meminfo.dwTotalPhys;
 	}
+
+#elif defined(__KLIBC__)
+
+	ULONG ulMem;
+	DosQuerySysInfo( QSV_TOTPHYSMEM, QSV_TOTPHYSMEM, &ulMem, sizeof(ulMem));
+	ret = ulMem;
 
 #elif defined(HAVE_PHYSMEM_SYSCONF)
 	const long pagesize = sysconf(_SC_PAGESIZE);

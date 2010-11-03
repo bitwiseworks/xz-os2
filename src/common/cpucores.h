@@ -16,6 +16,10 @@
 #if defined(HAVE_CPUCORES_SYSCONF)
 #	include <unistd.h>
 
+#elif defined(__KLIBC__)
+#	define INCL_DOS
+#	include <os2.h>
+
 #elif defined(HAVE_CPUCORES_SYSCTL)
 #	ifdef HAVE_SYS_PARAM_H
 #		include <sys/param.h>
@@ -31,7 +35,13 @@ cpucores(void)
 {
 	uint32_t ret = 0;
 
-#if defined(HAVE_CPUCORES_SYSCONF)
+#if defined(__KLIBC__)
+
+	ULONG ulCpu;
+	DosQuerySysInfo( QSV_NUMPROCESSORS, QSV_NUMPROCESSORS, &ulCpu, sizeof(ulCpu));
+	ret = ulCpu;
+
+#elif defined(HAVE_CPUCORES_SYSCONF)
 	const long cpus = sysconf(_SC_NPROCESSORS_ONLN);
 	if (cpus > 0)
 		ret = (uint32_t)(cpus);
