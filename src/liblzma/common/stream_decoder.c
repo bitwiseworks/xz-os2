@@ -57,6 +57,10 @@ struct lzma_coder_s {
 	/// If true, LZMA_GET_CHECK is returned after decoding Stream Header.
 	bool tell_any_check;
 
+	/// If true, we will tell the Block decoder to skip calculating
+	/// and verifying the integrity check.
+	bool ignore_check;
+
 	/// If true, we will decode concatenated Streams that possibly have
 	/// Stream Padding between or after them. LZMA_STREAM_END is returned
 	/// once the application isn't giving us any new input, and we aren't
@@ -80,7 +84,7 @@ struct lzma_coder_s {
 
 
 static lzma_ret
-stream_decoder_reset(lzma_coder *coder, lzma_allocator *allocator)
+stream_decoder_reset(lzma_coder *coder, const lzma_allocator *allocator)
 {
 	// Initialize the Index hash used to verify the Index.
 	coder->index_hash = lzma_index_hash_init(coder->index_hash, allocator);
@@ -96,7 +100,7 @@ stream_decoder_reset(lzma_coder *coder, lzma_allocator *allocator)
 
 
 static lzma_ret
-stream_decode(lzma_coder *coder, lzma_allocator *allocator,
+stream_decode(lzma_coder *coder, const lzma_allocator *allocator,
 		const uint8_t *restrict in, size_t *restrict in_pos,
 		size_t in_size, uint8_t *restrict out,
 		size_t *restrict out_pos, size_t out_size, lzma_action action)
@@ -182,6 +186,9 @@ stream_decode(lzma_coder *coder, lzma_allocator *allocator,
 
 		coder->pos = 0;
 
+		// Version 1 is needed to support the .ignore_check option.
+		coder->block_options.version = 1;
+
 		// Set up a buffer to hold the filter chain. Block Header
 		// decoder will initialize all members of this array so
 		// we don't need to do it here.
@@ -191,6 +198,11 @@ stream_decode(lzma_coder *coder, lzma_allocator *allocator,
 		// Decode the Block Header.
 		return_if_error(lzma_block_header_decode(&coder->block_options,
 				allocator, coder->buffer));
+
+		// If LZMA_IGNORE_CHECK was used, this flag needs to be set.
+		// It has to be set after lzma_block_header_decode() because
+		// it always resets this to false.
+		coder->block_options.ignore_check = coder->ignore_check;
 
 		// Check the memory usage limit.
 		const uint64_t memusage = lzma_raw_decoder_memusage(filters);
@@ -358,12 +370,12 @@ stream_decode(lzma_coder *coder, lzma_allocator *allocator,
 		return LZMA_PROG_ERROR;
 	}
 
-	return LZMA_OK;
+	// Never reached
 }
 
 
 static void
-stream_decoder_end(lzma_coder *coder, lzma_allocator *allocator)
+stream_decoder_end(lzma_coder *coder, const lzma_allocator *allocator)
 {
 	lzma_next_end(&coder->block_decoder, allocator);
 	lzma_index_hash_end(coder->index_hash, allocator);
@@ -383,19 +395,23 @@ static lzma_ret
 stream_decoder_memconfig(lzma_coder *coder, uint64_t *memusage,
 		uint64_t *old_memlimit, uint64_t new_memlimit)
 {
-	if (new_memlimit != 0 && new_memlimit < coder->memusage)
-		return LZMA_MEMLIMIT_ERROR;
-
 	*memusage = coder->memusage;
 	*old_memlimit = coder->memlimit;
-	coder->memlimit = new_memlimit;
+
+	if (new_memlimit != 0) {
+		if (new_memlimit < coder->memusage)
+			return LZMA_MEMLIMIT_ERROR;
+
+		coder->memlimit = new_memlimit;
+	}
 
 	return LZMA_OK;
 }
 
 
 extern lzma_ret
-lzma_stream_decoder_init(lzma_next_coder *next, lzma_allocator *allocator,
+lzma_stream_decoder_init(
+		lzma_next_coder *next, const lzma_allocator *allocator,
 		uint64_t memlimit, uint32_t flags)
 {
 	lzma_next_coder_init(&lzma_stream_decoder_init, next, allocator);
@@ -426,6 +442,7 @@ lzma_stream_decoder_init(lzma_next_coder *next, lzma_allocator *allocator,
 	next->coder->tell_unsupported_check
 			= (flags & LZMA_TELL_UNSUPPORTED_CHECK) != 0;
 	next->coder->tell_any_check = (flags & LZMA_TELL_ANY_CHECK) != 0;
+	next->coder->ignore_check = (flags & LZMA_IGNORE_CHECK) != 0;
 	next->coder->concatenated = (flags & LZMA_CONCATENATED) != 0;
 	next->coder->first_stream = true;
 

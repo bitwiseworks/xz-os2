@@ -31,8 +31,8 @@ typedef struct {
 } option_map;
 
 
-/// Parses option=value pairs that are separated with colons, semicolons,
-/// or commas: opt=val:opt=val;opt=val,opt=val
+/// Parses option=value pairs that are separated with commas:
+/// opt=val,opt=val,opt=val
 ///
 /// Each option is a string, that is converted to an integer using the
 /// index where the option string is in the array.
@@ -59,7 +59,7 @@ typedef struct {
 static void
 parse_options(const char *str, const option_map *opts,
 		void (*set)(void *filter_options,
-			uint32_t key, uint64_t value, const char *valuestr),
+			unsigned key, uint64_t value, const char *valuestr),
 		void *filter_options)
 {
 	if (str == NULL || str[0] == '\0')
@@ -68,11 +68,9 @@ parse_options(const char *str, const option_map *opts,
 	char *s = xstrdup(str);
 	char *name = s;
 
-	while (true) {
+	while (*name != '\0') {
 		if (*name == ',') {
-			if (*++name == '\0')
-				break;
-
+			++name;
 			continue;
 		}
 
@@ -89,47 +87,47 @@ parse_options(const char *str, const option_map *opts,
 					"pairs separated with commas"), str);
 
 		// Look for the option name from the option map.
-		bool found = false;
-		for (size_t i = 0; opts[i].name != NULL; ++i) {
-			if (strcmp(name, opts[i].name) != 0)
-				continue;
+		unsigned i = 0;
+		while (true) {
+			if (opts[i].name == NULL)
+				message_fatal(_("%s: Invalid option name"),
+						name);
 
-			if (opts[i].map != NULL) {
-				// value is a string which we should map
-				// to an integer.
-				size_t j;
-				for (j = 0; opts[i].map[j].name != NULL; ++j) {
-					if (strcmp(opts[i].map[j].name, value)
-							== 0)
-						break;
-				}
+			if (strcmp(name, opts[i].name) == 0)
+				break;
 
-				if (opts[i].map[j].name == NULL)
-					message_fatal(_("%s: Invalid option "
-							"value"), value);
-
-				set(filter_options, i, opts[i].map[j].id,
-						value);
-
-			} else if (opts[i].min == UINT64_MAX) {
-				// value is a special string that will be
-				// parsed by set().
-				set(filter_options, i, 0, value);
-
-			} else {
-				// value is an integer.
-				const uint64_t v = str_to_uint64(name, value,
-						opts[i].min, opts[i].max);
-				set(filter_options, i, v, value);
-			}
-
-			found = true;
-			break;
+			++i;
 		}
 
-		if (!found)
-			message_fatal(_("%s: Invalid option name"), name);
+		// Option was found from the map. See how we should handle it.
+		if (opts[i].map != NULL) {
+			// value is a string which we should map
+			// to an integer.
+			unsigned j;
+			for (j = 0; opts[i].map[j].name != NULL; ++j) {
+				if (strcmp(opts[i].map[j].name, value) == 0)
+					break;
+			}
 
+			if (opts[i].map[j].name == NULL)
+				message_fatal(_("%s: Invalid option value"),
+						value);
+
+			set(filter_options, i, opts[i].map[j].id, value);
+
+		} else if (opts[i].min == UINT64_MAX) {
+			// value is a special string that will be
+			// parsed by set().
+			set(filter_options, i, 0, value);
+
+		} else {
+			// value is an integer.
+			const uint64_t v = str_to_uint64(name, value,
+					opts[i].min, opts[i].max);
+			set(filter_options, i, v, value);
+		}
+
+		// Check if it was the last option.
 		if (split == NULL)
 			break;
 
@@ -138,67 +136,6 @@ parse_options(const char *str, const option_map *opts,
 
 	free(s);
 	return;
-}
-
-
-//////////////
-// Subblock //
-//////////////
-
-enum {
-	OPT_SIZE,
-	OPT_RLE,
-	OPT_ALIGN,
-};
-
-
-static void
-set_subblock(void *options, uint32_t key, uint64_t value,
-		const char *valuestr lzma_attribute((unused)))
-{
-	lzma_options_subblock *opt = options;
-
-	switch (key) {
-	case OPT_SIZE:
-		opt->subblock_data_size = value;
-		break;
-
-	case OPT_RLE:
-		opt->rle = value;
-		break;
-
-	case OPT_ALIGN:
-		opt->alignment = value;
-		break;
-	}
-}
-
-
-extern lzma_options_subblock *
-options_subblock(const char *str)
-{
-	static const option_map opts[] = {
-		{ "size", NULL,   LZMA_SUBBLOCK_DATA_SIZE_MIN,
-		                  LZMA_SUBBLOCK_DATA_SIZE_MAX },
-		{ "rle",  NULL,   LZMA_SUBBLOCK_RLE_OFF,
-		                  LZMA_SUBBLOCK_RLE_MAX },
-		{ "align",NULL,   LZMA_SUBBLOCK_ALIGNMENT_MIN,
-		                  LZMA_SUBBLOCK_ALIGNMENT_MAX },
-		{ NULL,   NULL,   0, 0 }
-	};
-
-	lzma_options_subblock *options
-			= xmalloc(sizeof(lzma_options_subblock));
-	*options = (lzma_options_subblock){
-		.allow_subfilters = false,
-		.alignment = LZMA_SUBBLOCK_ALIGNMENT_DEFAULT,
-		.subblock_data_size = LZMA_SUBBLOCK_DATA_SIZE_DEFAULT,
-		.rle = LZMA_SUBBLOCK_RLE_OFF,
-	};
-
-	parse_options(str, opts, &set_subblock, options);
-
-	return options;
 }
 
 
@@ -212,8 +149,8 @@ enum {
 
 
 static void
-set_delta(void *options, uint32_t key, uint64_t value,
-		const char *valuestr lzma_attribute((unused)))
+set_delta(void *options, unsigned key, uint64_t value,
+		const char *valuestr lzma_attribute((__unused__)))
 {
 	lzma_options_delta *opt = options;
 	switch (key) {
@@ -256,8 +193,8 @@ enum {
 
 
 static void
-set_bcj(void *options, uint32_t key, uint64_t value,
-		const char *valuestr lzma_attribute((unused)))
+set_bcj(void *options, unsigned key, uint64_t value,
+		const char *valuestr lzma_attribute((__unused__)))
 {
 	lzma_options_bcj *opt = options;
 	switch (key) {
@@ -304,7 +241,7 @@ enum {
 };
 
 
-static void lzma_attribute((noreturn))
+static void lzma_attribute((__noreturn__))
 error_lzma_preset(const char *valuestr)
 {
 	message_fatal(_("Unsupported LZMA1/LZMA2 preset: %s"), valuestr);
@@ -312,7 +249,7 @@ error_lzma_preset(const char *valuestr)
 
 
 static void
-set_lzma(void *options, uint32_t key, uint64_t value, const char *valuestr)
+set_lzma(void *options, unsigned key, uint64_t value, const char *valuestr)
 {
 	lzma_options_lzma *opt = options;
 
@@ -409,25 +346,13 @@ options_lzma(const char *str)
 	};
 
 	lzma_options_lzma *options = xmalloc(sizeof(lzma_options_lzma));
-	*options = (lzma_options_lzma){
-		.dict_size = LZMA_DICT_SIZE_DEFAULT,
-		.preset_dict =  NULL,
-		.preset_dict_size = 0,
-		.lc = LZMA_LC_DEFAULT,
-		.lp = LZMA_LP_DEFAULT,
-		.pb = LZMA_PB_DEFAULT,
-		.persistent = false,
-		.mode = LZMA_MODE_NORMAL,
-		.nice_len = 64,
-		.mf = LZMA_MF_BT4,
-		.depth = 0,
-	};
+	if (lzma_lzma_preset(options, LZMA_PRESET_DEFAULT))
+		message_bug();
 
 	parse_options(str, opts, &set_lzma, options);
 
 	if (options->lc + options->lp > LZMA_LCLP_MAX)
-		message_fatal(_("The sum of lc and lp must be at "
-				"maximum of 4"));
+		message_fatal(_("The sum of lc and lp must not exceed 4"));
 
 	const uint32_t nice_len_min = options->mf & 0x0F;
 	if (options->nice_len < nice_len_min)

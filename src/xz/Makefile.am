@@ -16,10 +16,14 @@ xz_SOURCES = \
 	file_io.h \
 	hardware.c \
 	hardware.h \
+	list.c \
+	list.h \
 	main.c \
 	main.h \
 	message.c \
 	message.h \
+	mytime.c \
+	mytime.h \
 	options.c \
 	options.h \
 	private.h \
@@ -28,7 +32,12 @@ xz_SOURCES = \
 	suffix.c \
 	suffix.h \
 	util.c \
-	util.h
+	util.h \
+	../common/tuklib_open_stdxxx.c \
+	../common/tuklib_progname.c \
+	../common/tuklib_exit.c \
+	../common/tuklib_mbstr_width.c \
+	../common/tuklib_mbstr_fw.c
 
 if COND_W32
 xz_SOURCES += xz_w32res.rc
@@ -38,10 +47,8 @@ xz_CPPFLAGS = \
 	-DLOCALEDIR=\"$(localedir)\" \
 	-I$(top_srcdir)/src/common \
 	-I$(top_srcdir)/src/liblzma/api \
-	-I$(top_builddir)/lib \
-	$(STATIC_CPPFLAGS)
+	-I$(top_builddir)/lib
 
-xz_LDFLAGS = $(STATIC_LDFLAGS)
 xz_LDADD = $(top_builddir)/src/liblzma/liblzma.la
 
 if COND_GNULIB
@@ -63,13 +70,17 @@ dist_man_MANS = xz.1
 
 ## Create symlinks for unxz and xzcat for convenience. Create symlinks also
 ## for lzma, unlzma, and lzcat for compatibility with LZMA Utils 4.32.x.
-xzlinks = unxz xzcat lzma unlzma lzcat
+xzlinks = unxz xzcat
+
+if COND_LZMALINKS
+xzlinks += lzma unlzma lzcat
+endif
 
 install-exec-hook:
 	cd $(DESTDIR)$(bindir) && \
 	target=`echo xz | sed '$(transform)'`$(EXEEXT) && \
 	for name in $(xzlinks); do \
-		link=`echo $$name | sed '$(transform)'` && \
+		link=`echo $$name | sed '$(transform)'`$(LN_EXEEXT) && \
 		rm -f $$link && \
 		$(LN_S) $$target $$link; \
 	done
@@ -86,7 +97,7 @@ install-data-hook:
 uninstall-hook:
 	cd $(DESTDIR)$(bindir) && \
 	for name in $(xzlinks); do \
-		link=`echo $$name | sed '$(transform)'` && \
+		link=`echo $$name | sed '$(transform)'`$(LN_EXEEXT) && \
 		rm -f $$link; \
 	done
 	cd $(DESTDIR)$(mandir)/man1 && \

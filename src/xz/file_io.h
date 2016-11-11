@@ -11,11 +11,21 @@
 ///////////////////////////////////////////////////////////////////////////////
 
 // Some systems have suboptimal BUFSIZ. Use a bit bigger value on them.
+// We also need that IO_BUFFER_SIZE is a multiple of 8 (sizeof(uint64_t))
 #if BUFSIZ <= 1024
 #	define IO_BUFFER_SIZE 8192
 #else
-#	define IO_BUFFER_SIZE BUFSIZ
+#	define IO_BUFFER_SIZE (BUFSIZ & ~7U)
 #endif
+
+
+/// is_sparse() accesses the buffer as uint64_t for maximum speed.
+/// Use an union to make sure that the buffer is properly aligned.
+typedef union {
+	uint8_t u8[IO_BUFFER_SIZE];
+	uint32_t u32[IO_BUFFER_SIZE / sizeof(uint32_t)];
+	uint64_t u64[IO_BUFFER_SIZE / sizeof(uint64_t)];
+} io_buf;
 
 
 typedef struct {
@@ -33,14 +43,23 @@ typedef struct {
 	/// File descriptor of the target file
 	int dest_fd;
 
+	/// True once end of the source file has been detected.
+	bool src_eof;
+
+	/// If true, we look for long chunks of zeros and try to create
+	/// a sparse file.
+	bool dest_try_sparse;
+
+	/// This is used only if dest_try_sparse is true. This holds the
+	/// number of zero bytes we haven't written out, because we plan
+	/// to make that byte range a sparse chunk.
+	off_t dest_pending_sparse;
+
 	/// Stat of the source file.
 	struct stat src_st;
 
 	/// Stat of the destination file.
 	struct stat dest_st;
-
-	/// True once end of the source file has been detected.
-	bool src_eof;
 
 } file_pair;
 
@@ -49,8 +68,24 @@ typedef struct {
 extern void io_init(void);
 
 
-/// \brief      Opens a file pair
-extern file_pair *io_open(const char *src_name);
+#ifndef TUKLIB_DOSLIKE
+/// \brief      Write a byte to user_abort_pipe[1]
+///
+/// This is called from a signal handler.
+extern void io_write_to_user_abort_pipe(void);
+#endif
+
+
+/// \brief      Disable creation of sparse files when decompressing
+extern void io_no_sparse(void);
+
+
+/// \brief      Open the source file
+extern file_pair *io_open_src(const char *src_name);
+
+
+/// \brief      Open the destination file
+extern bool io_open_dest(file_pair *pair);
 
 
 /// \brief      Closes the file descriptors and frees possible allocated memory
@@ -72,7 +107,36 @@ extern void io_close(file_pair *pair, bool success);
 /// \return     On success, number of bytes read is returned. On end of
 ///             file zero is returned and pair->src_eof set to true.
 ///             On error, SIZE_MAX is returned and error message printed.
-extern size_t io_read(file_pair *pair, uint8_t *buf, size_t size);
+extern size_t io_read(file_pair *pair, io_buf *buf, size_t size);
+
+
+/// \brief      Fix the position in src_fd
+///
+/// This is used when --single-thream has been specified and decompression
+/// is successful. If the input file descriptor supports seeking, this
+/// function fixes the input position to point to the next byte after the
+/// decompressed stream.
+///
+/// \param      pair        File pair having the source file open for reading
+/// \param      rewind_size How many bytes of extra have been read i.e.
+///                         how much to seek backwards.
+extern void io_fix_src_pos(file_pair *pair, size_t rewind_size);
+
+
+/// \brief      Read from source file from given offset to a buffer
+///
+/// This is remotely similar to standard pread(). This uses lseek() though,
+/// so the read offset is changed on each call.
+///
+/// \param      pair    Seekable source file
+/// \param      buf     Destination buffer
+/// \param      size    Amount of data to read
+/// \param      pos     Offset relative to the beginning of the file,
+///                     from which the data should be read.
+///
+/// \return     On success, false is returned. On error, error message
+///             is printed and true is returned.
+extern bool io_pread(file_pair *pair, io_buf *buf, size_t size, off_t pos);
 
 
 /// \brief      Writes a buffer to the destination file
@@ -83,4 +147,4 @@ extern size_t io_read(file_pair *pair, uint8_t *buf, size_t size);
 ///
 /// \return     On success, zero is returned. On error, -1 is returned
 ///             and error message printed.
-extern bool io_write(const file_pair *pair, const uint8_t *buf, size_t size);
+extern bool io_write(file_pair *pair, const io_buf *buf, size_t size);

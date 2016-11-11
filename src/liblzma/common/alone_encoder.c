@@ -32,7 +32,7 @@ struct lzma_coder_s {
 
 static lzma_ret
 alone_encode(lzma_coder *coder,
-		lzma_allocator *allocator lzma_attribute((unused)),
+		const lzma_allocator *allocator lzma_attribute((__unused__)),
 		const uint8_t *restrict in, size_t *restrict in_pos,
 		size_t in_size, uint8_t *restrict out,
 		size_t *restrict out_pos, size_t out_size,
@@ -65,7 +65,7 @@ alone_encode(lzma_coder *coder,
 
 
 static void
-alone_encoder_end(lzma_coder *coder, lzma_allocator *allocator)
+alone_encoder_end(lzma_coder *coder, const lzma_allocator *allocator)
 {
 	lzma_next_end(&coder->next, allocator);
 	lzma_free(coder, allocator);
@@ -75,7 +75,7 @@ alone_encoder_end(lzma_coder *coder, lzma_allocator *allocator)
 
 // At least for now, this is not used by any internal function.
 static lzma_ret
-alone_encoder_init(lzma_next_coder *next, lzma_allocator *allocator,
+alone_encoder_init(lzma_next_coder *next, const lzma_allocator *allocator,
 		const lzma_options_lzma *options)
 {
 	lzma_next_coder_init(&alone_encoder_init, next, allocator);
@@ -103,7 +103,7 @@ alone_encoder_init(lzma_next_coder *next, lzma_allocator *allocator,
 	if (options->dict_size < LZMA_DICT_SIZE_MIN)
 		return LZMA_OPTIONS_ERROR;
 
-	// Round up to to the next 2^n or 2^n + 2^(n - 1) depending on which
+	// Round up to the next 2^n or 2^n + 2^(n - 1) depending on which
 	// one is the next unless it is UINT32_MAX. While the header would
 	// allow any 32-bit integer, we do this to keep the decoder of liblzma
 	// accepting the resulting files.
@@ -116,7 +116,7 @@ alone_encoder_init(lzma_next_coder *next, lzma_allocator *allocator,
 	if (d != UINT32_MAX)
 		++d;
 
-	integer_write_32(next->coder->header + 1, d);
+	unaligned_write32le(next->coder->header + 1, d);
 
 	// - Uncompressed size (always unknown and using EOPM)
 	memset(next->coder->header + 1 + 4, 0xFF, 8);
@@ -137,7 +137,7 @@ alone_encoder_init(lzma_next_coder *next, lzma_allocator *allocator,
 
 /*
 extern lzma_ret
-lzma_alone_encoder_init(lzma_next_coder *next, lzma_allocator *allocator,
+lzma_alone_encoder_init(lzma_next_coder *next, const lzma_allocator *allocator,
 		const lzma_options_alone *options)
 {
 	lzma_next_coder_init(&alone_encoder_init, next, allocator, options);

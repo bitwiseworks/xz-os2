@@ -14,10 +14,10 @@ nobase_include_HEADERS = \
 	lzma/container.h \
 	lzma/delta.h \
 	lzma/filter.h \
+	lzma/hardware.h \
 	lzma/index.h \
 	lzma/index_hash.h \
-	lzma/lzma.h \
+	lzma/lzma12.h \
 	lzma/stream_flags.h \
-	lzma/subblock.h \
 	lzma/version.h \
 	lzma/vli.h

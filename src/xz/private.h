@@ -12,6 +12,7 @@
 
 #include "sysdefs.h"
 #include "mythread.h"
+
 #include "lzma.h"
 
 #include <sys/types.h>
@@ -22,13 +23,14 @@
 #include <stdio.h>
 #include <unistd.h>
 
-#ifdef ENABLE_NLS
-#	include <libintl.h>
-#	define _(msgid) gettext(msgid)
-#	define N_(msgid1, msgid2, n) ngettext(msgid1, msgid2, n)
-#else
-#	define _(msgid) (msgid)
-#	define N_(msgid1, msgid2, n) ((n) == 1 ? (msgid1) : (msgid2))
+#include "tuklib_gettext.h"
+#include "tuklib_progname.h"
+#include "tuklib_exit.h"
+#include "tuklib_mbstr.h"
+
+#if defined(_WIN32) && !defined(__CYGWIN__)
+#	define WIN32_LEAN_AND_MEAN
+#	include <windows.h>
 #endif
 
 #ifndef STDIN_FILENO
@@ -44,6 +46,7 @@
 #endif
 
 #include "main.h"
+#include "mytime.h"
 #include "coder.h"
 #include "message.h"
 #include "args.h"
@@ -53,3 +56,4 @@
 #include "signals.h"
 #include "suffix.h"
 #include "util.h"
+#include "list.h"
