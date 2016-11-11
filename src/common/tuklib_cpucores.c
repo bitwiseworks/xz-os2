@@ -23,6 +23,10 @@
 #	include <sys/param.h>
 #	include <sys/cpuset.h>
 
+#elif defined(__KLIBC__)
+#	define INCL_DOS
+#	include <os2.h>
+
 #elif defined(TUKLIB_CPUCORES_SYSCTL)
 #	ifdef HAVE_SYS_PARAM_H
 #		include <sys/param.h>
@@ -61,6 +65,11 @@ tuklib_cpucores(void)
 				++ret;
 #	endif
 	}
+
+#elif defined(__KLIBC__)
+	ULONG ulCpu;
+	DosQuerySysInfo( QSV_NUMPROCESSORS, QSV_NUMPROCESSORS, &ulCpu, sizeof(ulCpu));
+	ret = ulCpu;
 
 #elif defined(TUKLIB_CPUCORES_SYSCTL)
 	int name[2] = { CTL_HW, HW_NCPU };
