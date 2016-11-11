@@ -67,7 +67,7 @@ typedef struct {
 			lzma_vli uncompressed_size);
 
 	/// Free allocated resources
-	void (*end)(lzma_coder *coder, lzma_allocator *allocator);
+	void (*end)(lzma_coder *coder, const lzma_allocator *allocator);
 
 } lzma_lz_decoder;
 
@@ -83,9 +83,10 @@ typedef struct {
 
 
 extern lzma_ret lzma_lz_decoder_init(lzma_next_coder *next,
-		lzma_allocator *allocator, const lzma_filter_info *filters,
+		const lzma_allocator *allocator,
+		const lzma_filter_info *filters,
 		lzma_ret (*lz_init)(lzma_lz_decoder *lz,
-			lzma_allocator *allocator, const void *options,
+			const lzma_allocator *allocator, const void *options,
 			lzma_lz_options *lz_options));
 
 extern uint64_t lzma_lz_decoder_memusage(size_t dictionary_size);
@@ -129,7 +130,7 @@ dict_repeat(lzma_dict *dict, uint32_t distance, uint32_t *len)
 {
 	// Don't write past the end of the dictionary.
 	const size_t dict_avail = dict->limit - dict->pos;
-	uint32_t left = MIN(dict_avail, *len);
+	uint32_t left = my_min(dict_avail, *len);
 	*len -= left;
 
 	// Repeat a block of data from the history. Because memcpy() is faster

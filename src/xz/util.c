@@ -11,15 +11,14 @@
 ///////////////////////////////////////////////////////////////////////////////
 
 #include "private.h"
+#include <stdarg.h>
 
 
-// Thousand separator for format strings is not supported outside POSIX.
-// This is used in uint64_to_str() and double_to_str().
-#ifdef DOSLIKE
-#	define THOUSAND ""
-#else
-#	define THOUSAND "'"
-#endif
+/// Buffers for uint64_to_str() and uint64_to_nicestr()
+static char bufs[4][128];
+
+/// Thousand separator support in uint64_to_str() and uint64_to_nicestr()
+static enum { UNKNOWN, WORKS, BROKEN } thousand = UNKNOWN;
 
 
 extern void *
@@ -27,9 +26,19 @@ xrealloc(void *ptr, size_t size)
 {
 	assert(size > 0);
 
+	// Save ptr so that we can free it if realloc fails.
+	// The point is that message_fatal ends up calling stdio functions
+	// which in some libc implementations might allocate memory from
+	// the heap. Freeing ptr improves the chances that there's free
+	// memory for stdio functions if they need it.
+	void *p = ptr;
 	ptr = realloc(ptr, size);
-	if (ptr == NULL)
-		message_fatal("%s", strerror(errno));
+
+	if (ptr == NULL) {
+		const int saved_errno = errno;
+		free(p);
+		message_fatal("%s", strerror(saved_errno));
+	}
 
 	return ptr;
 }
@@ -64,48 +73,47 @@ str_to_uint64(const char *name, const char *value, uint64_t min, uint64_t max)
 
 	do {
 		// Don't overflow.
-		if (result > (UINT64_MAX - 9) / 10)
+		if (result > UINT64_MAX / 10)
 			goto error;
 
 		result *= 10;
-		result += *value - '0';
+
+		// Another overflow check
+		const uint32_t add = *value - '0';
+		if (UINT64_MAX - add < result)
+			goto error;
+
+		result += add;
 		++value;
 	} while (*value >= '0' && *value <= '9');
 
 	if (*value != '\0') {
-		// Look for suffix.
-		static const struct {
-			const char name[4];
-			uint64_t multiplier;
-		} suffixes[] = {
-			{ "k",   UINT64_C(1000) },
-			{ "kB",  UINT64_C(1000) },
-			{ "M",   UINT64_C(1000000) },
-			{ "MB",  UINT64_C(1000000) },
-			{ "G",   UINT64_C(1000000000) },
-			{ "GB",  UINT64_C(1000000000) },
-			{ "Ki",  UINT64_C(1024) },
-			{ "KiB", UINT64_C(1024) },
-			{ "Mi",  UINT64_C(1048576) },
-			{ "MiB", UINT64_C(1048576) },
-			{ "Gi",  UINT64_C(1073741824) },
-			{ "GiB", UINT64_C(1073741824) }
-		};
-
+		// Look for suffix. Originally this supported both base-2
+		// and base-10, but since there seems to be little need
+		// for base-10 in this program, treat everything as base-2
+		// and also be more relaxed about the case of the first
+		// letter of the suffix.
 		uint64_t multiplier = 0;
-		for (size_t i = 0; i < ARRAY_SIZE(suffixes); ++i) {
-			if (strcmp(value, suffixes[i].name) == 0) {
-				multiplier = suffixes[i].multiplier;
-				break;
-			}
-		}
+		if (*value == 'k' || *value == 'K')
+			multiplier = UINT64_C(1) << 10;
+		else if (*value == 'm' || *value == 'M')
+			multiplier = UINT64_C(1) << 20;
+		else if (*value == 'g' || *value == 'G')
+			multiplier = UINT64_C(1) << 30;
+
+		++value;
+
+		// Allow also e.g. Ki, KiB, and KB.
+		if (*value != '\0' && strcmp(value, "i") != 0
+				&& strcmp(value, "iB") != 0
+				&& strcmp(value, "B") != 0)
+			multiplier = 0;
 
 		if (multiplier == 0) {
-			message(V_ERROR, _("%s: Invalid multiplier suffix. "
-					"Valid suffixes:"), value);
-			message_fatal("`k' (10^3), `M' (10^6), `G' (10^9) "
-					"`Ki' (2^10), `Mi' (2^20), "
-					"`Gi' (2^30)");
+			message(V_ERROR, _("%s: Invalid multiplier suffix"),
+					value - 1);
+			message_fatal(_("Valid suffixes are `KiB' (2^10), "
+					"`MiB' (2^20), and `GiB' (2^30)."));
 		}
 
 		// Don't overflow here either.
@@ -127,68 +135,119 @@ error:
 }
 
 
+extern uint64_t
+round_up_to_mib(uint64_t n)
+{
+	return (n >> 20) + ((n & ((UINT32_C(1) << 20) - 1)) != 0);
+}
+
+
+/// Check if thousand separator is supported. Run-time checking is easiest,
+/// because it seems to be sometimes lacking even on POSIXish system.
+static void
+check_thousand_sep(uint32_t slot)
+{
+	if (thousand == UNKNOWN) {
+		bufs[slot][0] = '\0';
+		snprintf(bufs[slot], sizeof(bufs[slot]), "%'u", 1U);
+		thousand = bufs[slot][0] == '1' ? WORKS : BROKEN;
+	}
+
+	return;
+}
+
+
 extern const char *
 uint64_to_str(uint64_t value, uint32_t slot)
 {
-	// 2^64 with thousand separators is 26 bytes plus trailing '\0'.
-	static char bufs[4][32];
-
 	assert(slot < ARRAY_SIZE(bufs));
 
-	snprintf(bufs[slot], sizeof(bufs[slot]), "%" THOUSAND PRIu64, value);
+	check_thousand_sep(slot);
+
+	if (thousand == WORKS)
+		snprintf(bufs[slot], sizeof(bufs[slot]), "%'" PRIu64, value);
+	else
+		snprintf(bufs[slot], sizeof(bufs[slot]), "%" PRIu64, value);
+
 	return bufs[slot];
 }
 
 
 extern const char *
-double_to_str(double value)
+uint64_to_nicestr(uint64_t value, enum nicestr_unit unit_min,
+		enum nicestr_unit unit_max, bool always_also_bytes,
+		uint32_t slot)
 {
-	// 64 bytes is surely enough, since it won't fit in some other
-	// fields anyway.
-	static char buf[64];
+	assert(unit_min <= unit_max);
+	assert(unit_max <= NICESTR_TIB);
+	assert(slot < ARRAY_SIZE(bufs));
 
-	snprintf(buf, sizeof(buf), "%" THOUSAND ".1f", value);
-	return buf;
-}
+	check_thousand_sep(slot);
 
+	enum nicestr_unit unit = NICESTR_B;
+	char *pos = bufs[slot];
+	size_t left = sizeof(bufs[slot]);
 
-/*
-/// \brief      Simple quoting to get rid of ASCII control characters
-///
-/// This is not so cool and locale-dependent, but should be good enough
-/// At least we don't print any control characters on the terminal.
-///
-extern char *
-str_quote(const char *str)
-{
-	size_t dest_len = 0;
-	bool has_ctrl = false;
+	if ((unit_min == NICESTR_B && value < 10000)
+			|| unit_max == NICESTR_B) {
+		// The value is shown as bytes.
+		if (thousand == WORKS)
+			my_snprintf(&pos, &left, "%'u", (unsigned int)value);
+		else
+			my_snprintf(&pos, &left, "%u", (unsigned int)value);
+	} else {
+		// Scale the value to a nicer unit. Unless unit_min and
+		// unit_max limit us, we will show at most five significant
+		// digits with one decimal place.
+		double d = (double)(value);
+		do {
+			d /= 1024.0;
+			++unit;
+		} while (unit < unit_min || (d > 9999.9 && unit < unit_max));
 
-	while (str[dest_len] != '\0')
-		if (*(unsigned char *)(str + dest_len++) < 0x20)
-			has_ctrl = true;
-
-	char *dest = malloc(dest_len + 1);
-	if (dest != NULL) {
-		if (has_ctrl) {
-			for (size_t i = 0; i < dest_len; ++i)
-				if (*(unsigned char *)(str + i) < 0x20)
-					dest[i] = '?';
-				else
-					dest[i] = str[i];
-
-			dest[dest_len] = '\0';
-
-		} else {
-			// Usually there are no control characters,
-			// so we can optimize.
-			memcpy(dest, str, dest_len + 1);
-		}
+		if (thousand == WORKS)
+			my_snprintf(&pos, &left, "%'.1f", d);
+		else
+			my_snprintf(&pos, &left, "%.1f", d);
 	}
 
-	return dest;
+	static const char suffix[5][4] = { "B", "KiB", "MiB", "GiB", "TiB" };
+	my_snprintf(&pos, &left, " %s", suffix[unit]);
+
+	if (always_also_bytes && value >= 10000) {
+		if (thousand == WORKS)
+			snprintf(pos, left, " (%'" PRIu64 " B)", value);
+		else
+			snprintf(pos, left, " (%" PRIu64 " B)", value);
+	}
+
+	return bufs[slot];
 }
-*/
+
+
+extern void
+my_snprintf(char **pos, size_t *left, const char *fmt, ...)
+{
+	va_list ap;
+	va_start(ap, fmt);
+	const int len = vsnprintf(*pos, *left, fmt, ap);
+	va_end(ap);
+
+	// If an error occurred, we want the caller to think that the whole
+	// buffer was used. This way no more data will be written to the
+	// buffer. We don't need better error handling here, although it
+	// is possible that the result looks garbage on the terminal if
+	// e.g. an UTF-8 character gets split. That shouldn't (easily)
+	// happen though, because the buffers used have some extra room.
+	if (len < 0 || (size_t)(len) >= *left) {
+		*left = 0;
+	} else {
+		*pos += len;
+		*left -= len;
+	}
+
+	return;
+}
 
 
 extern bool
@@ -209,8 +268,8 @@ is_tty_stdin(void)
 	const bool ret = isatty(STDIN_FILENO);
 
 	if (ret)
-		message_error(_("Compressed data not read from a terminal "
-				"unless `--force' is used."));
+		message_error(_("Compressed data cannot be read from "
+				"a terminal"));
 
 	return ret;
 }
@@ -222,8 +281,8 @@ is_tty_stdout(void)
 	const bool ret = isatty(STDOUT_FILENO);
 
 	if (ret)
-		message_error(_("Compressed data not written to a terminal "
-				"unless `--force' is used."));
+		message_error(_("Compressed data cannot be written to "
+				"a terminal"));
 
 	return ret;
 }

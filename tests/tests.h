@@ -14,14 +14,14 @@
 #define LZMA_TESTS_H
 
 #include "sysdefs.h"
-#include "integer.h"
+#include "tuklib_integer.h"
 #include "lzma.h"
 
 #include <stdio.h>
 
 #define memcrap(buf, size) memset(buf, 0xFD, size)
 
-#define expect(test) ((test) ? 0 : (fprintf(stderr, "%s:%u: %s\n", \
+#define expect(test) ((test) ? 0 : (fprintf(stderr, "%s:%d: %s\n", \
 	__FILE__, __LINE__, #test), abort(), 0))
 
 #define succeed(test) expect(!(test))

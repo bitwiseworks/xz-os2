@@ -14,6 +14,8 @@
 #include "lzma.h"
 #include <stdio.h>
 
+#define CHUNK 64
+
 
 static lzma_stream strm = LZMA_STREAM_INIT;
 static FILE *file_in;
@@ -22,14 +24,13 @@ static FILE *file_in;
 static void
 encode(size_t size, lzma_action action)
 {
-	static const size_t CHUNK = 64;
 	uint8_t in[CHUNK];
 	uint8_t out[CHUNK];
 	lzma_ret ret;
 
 	do {
 		if (strm.avail_in == 0 && size > 0) {
-			const size_t amount = MIN(size, CHUNK);
+			const size_t amount = my_min(size, CHUNK);
 			strm.avail_in = fread(in, 1, amount, file_in);
 			strm.next_in = in;
 			size -= amount; // Intentionally not using avail_in.
@@ -71,7 +72,6 @@ main(int argc, char **argv)
 		.lp = LZMA_LP_DEFAULT,
 		.pb = LZMA_PB_DEFAULT,
 		.preset_dict = NULL,
-		.persistent = true,
 		.mode = LZMA_MODE_NORMAL,
 		.nice_len = 32,
 		.mf = LZMA_MF_HC3,
@@ -81,18 +81,6 @@ main(int argc, char **argv)
 	lzma_options_delta opt_delta = {
 		.dist = 16
 	};
-
-	lzma_options_subblock opt_subblock = {
-		.allow_subfilters = true,
-		.alignment = 8, // LZMA_SUBBLOCK_ALIGNMENT_DEFAULT,
-		.subblock_data_size = LZMA_SUBBLOCK_DATA_SIZE_DEFAULT,
-		.rle = 1, // LZMA_SUBBLOCK_RLE_OFF,
-		.subfilter_mode = LZMA_SUBFILTER_SET,
-	};
-	opt_subblock.subfilter_options.id = LZMA_FILTER_LZMA1;
-	opt_subblock.subfilter_options.options = &opt_lzma;
-	opt_subblock.subfilter_options.id = LZMA_FILTER_DELTA;
-	opt_subblock.subfilter_options.options = &opt_delta;
 
 	lzma_filter filters[LZMA_FILTERS_MAX + 1];
 	filters[0].id = LZMA_FILTER_LZMA2;
@@ -106,20 +94,25 @@ main(int argc, char **argv)
 	}
 
 	// Encoding
-
 	encode(0, LZMA_SYNC_FLUSH);
 	encode(6, LZMA_SYNC_FLUSH);
 	encode(0, LZMA_SYNC_FLUSH);
 	encode(7, LZMA_SYNC_FLUSH);
 	encode(0, LZMA_SYNC_FLUSH);
 	encode(0, LZMA_FINISH);
+
 /*
 	encode(53, LZMA_SYNC_FLUSH);
-// 	opt_lzma.literal_context_bits = 2;
-// 	opt_lzma.literal_pos_bits = 1;
-// 	opt_lzma.pos_bits = 0;
+	opt_lzma.lc = 2;
+	opt_lzma.lp = 1;
+	opt_lzma.pb = 0;
+	if (lzma_filters_update(&strm, filters) != LZMA_OK) {
+		fprintf(stderr, "update failed\n");
+		exit(1);
+	}
 	encode(404, LZMA_FINISH);
 */
+
 	// Clean up
 	lzma_end(&strm);
 
@@ -128,6 +121,5 @@ main(int argc, char **argv)
 	// Prevent useless warnings so we don't need to have special CFLAGS
 	// to disable -Werror.
 	(void)opt_lzma;
-	(void)opt_subblock;
 	(void)opt_delta;
 }

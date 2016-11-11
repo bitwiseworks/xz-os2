@@ -14,8 +14,6 @@
 #include "filter_common.h"
 #include "lzma_decoder.h"
 #include "lzma2_decoder.h"
-#include "subblock_decoder.h"
-#include "subblock_decoder_helper.h"
 #include "simple_decoder.h"
 #include "delta_decoder.h"
 
@@ -37,7 +35,8 @@ typedef struct {
 	/// \return     - LZMA_OK: Properties decoded successfully.
 	///             - LZMA_OPTIONS_ERROR: Unsupported properties
 	///             - LZMA_MEM_ERROR: Memory allocation failed.
-	lzma_ret (*props_decode)(void **options, lzma_allocator *allocator,
+	lzma_ret (*props_decode)(
+			void **options, const lzma_allocator *allocator,
 			const uint8_t *props, size_t props_size);
 
 } lzma_filter_decoder;
@@ -58,20 +57,6 @@ static const lzma_filter_decoder decoders[] = {
 		.init = &lzma_lzma2_decoder_init,
 		.memusage = &lzma_lzma2_decoder_memusage,
 		.props_decode = &lzma_lzma2_props_decode,
-	},
-#endif
-#ifdef HAVE_DECODER_SUBBLOCK
-	{
-		.id = LZMA_FILTER_SUBBLOCK,
-		.init = &lzma_subblock_decoder_init,
-// 		.memusage = &lzma_subblock_decoder_memusage,
-		.props_decode = NULL,
-	},
-	{
-		.id = LZMA_FILTER_SUBBLOCK_HELPER,
-		.init = &lzma_subblock_decoder_helper_init,
-		.memusage = NULL,
-		.props_decode = NULL,
 	},
 #endif
 #ifdef HAVE_DECODER_X86
@@ -152,7 +137,7 @@ lzma_filter_decoder_is_supported(lzma_vli id)
 
 
 extern lzma_ret
-lzma_raw_decoder_init(lzma_next_coder *next, lzma_allocator *allocator,
+lzma_raw_decoder_init(lzma_next_coder *next, const lzma_allocator *allocator,
 		const lzma_filter *options)
 {
 	return lzma_raw_coder_init(next, allocator,
@@ -181,7 +166,7 @@ lzma_raw_decoder_memusage(const lzma_filter *filters)
 
 
 extern LZMA_API(lzma_ret)
-lzma_properties_decode(lzma_filter *filter, lzma_allocator *allocator,
+lzma_properties_decode(lzma_filter *filter, const lzma_allocator *allocator,
 		const uint8_t *props, size_t props_size)
 {
 	// Make it always NULL so that the caller can always safely free() it.

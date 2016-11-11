@@ -13,9 +13,14 @@
 #include "private.h"
 #include <ctype.h>
 
-
 /// Exit status to use. This can be changed with set_exit_status().
 static enum exit_status_type exit_status = E_SUCCESS;
+
+#if defined(_WIN32) && !defined(__CYGWIN__)
+/// exit_status has to be protected with a critical section due to
+/// how "signal handling" is done on Windows. See signals.c for details.
+static CRITICAL_SECTION exit_status_cs;
+#endif
 
 /// True if --no-warn is specified. When this is true, we don't set
 /// the exit status to E_WARNING when something worth a warning happens.
@@ -27,8 +32,16 @@ set_exit_status(enum exit_status_type new_status)
 {
 	assert(new_status == E_WARNING || new_status == E_ERROR);
 
+#if defined(_WIN32) && !defined(__CYGWIN__)
+	EnterCriticalSection(&exit_status_cs);
+#endif
+
 	if (exit_status != E_ERROR)
 		exit_status = new_status;
+
+#if defined(_WIN32) && !defined(__CYGWIN__)
+	LeaveCriticalSection(&exit_status_cs);
+#endif
 
 	return;
 }
@@ -42,52 +55,11 @@ set_exit_no_warn(void)
 }
 
 
-extern void
-my_exit(enum exit_status_type status)
-{
-	// Close stdout. If something goes wrong, print an error message
-	// to stderr.
-	{
-		const int ferror_err = ferror(stdout);
-		const int fclose_err = fclose(stdout);
-		if (ferror_err || fclose_err) {
-			// If it was fclose() that failed, we have the reason
-			// in errno. If only ferror() indicated an error,
-			// we have no idea what the reason was.
-			message(V_ERROR, "%s: %s", _("Writing to standard "
-						"output failed"),
-					fclose_err ? strerror(errno)
-						: _("Unknown error"));
-			status = E_ERROR;
-		}
-	}
-
-	// Close stderr. If something goes wrong, there's nothing where we
-	// could print an error message. Just set the exit status.
-	{
-		const int ferror_err = ferror(stderr);
-		const int fclose_err = fclose(stderr);
-		if (fclose_err || ferror_err)
-			status = E_ERROR;
-	}
-
-	// Suppress the exit status indicating a warning if --no-warn
-	// was specified.
-	if (status == E_WARNING && no_warn)
-		status = E_SUCCESS;
-
-	// If we have got a signal, raise it to kill the program.
-	// Otherwise we just call exit().
-	signals_exit();
-	exit(status);
-}
-
-
 static const char *
 read_name(const args_info *args)
 {
 	// FIXME: Maybe we should have some kind of memory usage limit here
-	// like the tool has for the actual compression and uncompression.
+	// like the tool has for the actual compression and decompression.
 	// Giving some huge text file with --files0 makes us to read the
 	// whole file in RAM.
 	static char *name = NULL;
@@ -170,48 +142,25 @@ read_name(const args_info *args)
 int
 main(int argc, char **argv)
 {
-	// Initialize the file I/O as the very first step. This makes sure
-	// that stdin, stdout, and stderr are something valid.
+#if defined(_WIN32) && !defined(__CYGWIN__)
+	InitializeCriticalSection(&exit_status_cs);
+#endif
+
+	// Set up the progname variable.
+	tuklib_progname_init(argv);
+
+	// Initialize the file I/O. This makes sure that
+	// stdin, stdout, and stderr are something valid.
 	io_init();
 
-#ifdef DOSLIKE
-	// Adjust argv[0] to make it look nicer in messages, and also to
-	// help the code in args.c.
-	{
-		// Strip the leading path.
-		char *p = argv[0] + strlen(argv[0]);
-		while (argv[0] < p && p[-1] != '/' && p[-1] != '\\')
-			--p;
+	// Set up the locale and message translations.
+	tuklib_gettext_init(PACKAGE, LOCALEDIR);
 
-		argv[0] = p;
-
-		// Strip the .exe suffix.
-		p = strrchr(p, '.');
-		if (p != NULL)
-			*p = '\0';
-
-		// Make it lowercase.
-		for (p = argv[0]; *p != '\0'; ++p)
-			if (*p >= 'A' && *p <= 'Z')
-				*p = *p - 'A' + 'a';
-	}
-#endif
-
-	// Set up the locale.
-	setlocale(LC_ALL, "");
-
-#ifdef ENABLE_NLS
-	// Set up the message translations too.
-	bindtextdomain(PACKAGE, LOCALEDIR);
-	textdomain(PACKAGE);
-#endif
-
-	// Set the program invocation name used in various messages, and
-	// do other message handling related initializations.
-	message_init(argv[0]);
+	// Initialize handling of error/warning/other messages.
+	message_init();
 
 	// Set hardware-dependent default values. These can be overriden
-	// on the command line, thus this must be done before parse_args().
+	// on the command line, thus this must be done before args_parse().
 	hardware_init();
 
 	// Parse the command line arguments and get an array of filenames.
@@ -221,6 +170,10 @@ main(int argc, char **argv)
 	args_info args;
 	args_parse(&args, argc, argv);
 
+	if (opt_mode != MODE_LIST && opt_robot)
+		message_fatal(_("Compression and decompression with --robot "
+			"are not supported yet."));
+
 	// Tell the message handling code how many input files there are if
 	// we know it. This way the progress indicator can show it.
 	if (args.files_name != NULL)
@@ -229,40 +182,46 @@ main(int argc, char **argv)
 		message_set_files(args.arg_count);
 
 	// Refuse to write compressed data to standard output if it is
-	// a terminal and --force wasn't used.
-	if (opt_mode == MODE_COMPRESS && !opt_force) {
+	// a terminal.
+	if (opt_mode == MODE_COMPRESS) {
 		if (opt_stdout || (args.arg_count == 1
 				&& strcmp(args.arg_names[0], "-") == 0)) {
 			if (is_tty_stdout()) {
 				message_try_help();
-				my_exit(E_ERROR);
+				tuklib_exit(E_ERROR, E_ERROR, false);
 			}
 		}
 	}
 
-	if (opt_mode == MODE_LIST) {
-		message_fatal("--list is not implemented yet.");
-	}
+	// Set up the signal handlers. We don't need these before we
+	// start the actual action and not in --list mode, so this is
+	// done after parsing the command line arguments.
+	//
+	// It's good to keep signal handlers in normal compression and
+	// decompression modes even when only writing to stdout, because
+	// we might need to restore O_APPEND flag on stdout before exiting.
+	// In --test mode, signal handlers aren't really needed, but let's
+	// keep them there for consistency with normal decompression.
+	if (opt_mode != MODE_LIST)
+		signals_init();
 
-	// Hook the signal handlers. We don't need these before we start
-	// the actual action, so this is done after parsing the command
-	// line arguments.
-	signals_init();
+	// coder_run() handles compression, decompression, and testing.
+	// list_file() is for --list.
+	void (*run)(const char *filename) = opt_mode == MODE_LIST
+			 ? &list_file : &coder_run;
 
 	// Process the files given on the command line. Note that if no names
-	// were given, parse_args() gave us a fake "-" filename.
-	for (size_t i = 0; i < args.arg_count && !user_abort; ++i) {
+	// were given, args_parse() gave us a fake "-" filename.
+	for (unsigned i = 0; i < args.arg_count && !user_abort; ++i) {
 		if (strcmp("-", args.arg_names[i]) == 0) {
-			// Processing from stdin to stdout. Unless --force
-			// was used, check that we aren't writing compressed
-			// data to a terminal or reading it from terminal.
-			if (!opt_force) {
-				if (opt_mode == MODE_COMPRESS) {
-					if (is_tty_stdout())
-						continue;
-				} else if (is_tty_stdin()) {
+			// Processing from stdin to stdout. Check that we
+			// aren't writing compressed data to a terminal or
+			// reading it from a terminal.
+			if (opt_mode == MODE_COMPRESS) {
+				if (is_tty_stdout())
 					continue;
-				}
+			} else if (is_tty_stdin()) {
+				continue;
 			}
 
 			// It doesn't make sense to compress data from stdin
@@ -284,8 +243,8 @@ main(int argc, char **argv)
 			args.arg_names[i] = (char *)stdin_filename;
 		}
 
-		// Do the actual compression or uncompression.
-		coder_run(args.arg_names[i]);
+		// Do the actual compression or decompression.
+		run(args.arg_names[i]);
 	}
 
 	// If --files or --files0 was used, process the filenames from the
@@ -301,12 +260,48 @@ main(int argc, char **argv)
 
 			// read_name() doesn't return empty names.
 			assert(name[0] != '\0');
-			coder_run(name);
+			run(name);
 		}
 
 		if (args.files_name != stdin_filename)
 			(void)fclose(args.files_file);
 	}
 
-	my_exit(exit_status);
+	// All files have now been handled. If in --list mode, display
+	// the totals before exiting. We don't have signal handlers
+	// enabled in --list mode, so we don't need to check user_abort.
+	if (opt_mode == MODE_LIST) {
+		assert(!user_abort);
+		list_totals();
+	}
+
+#ifndef NDEBUG
+	coder_free();
+	args_free();
+#endif
+
+	// If we have got a signal, raise it to kill the program instead
+	// of calling tuklib_exit().
+	signals_exit();
+
+	// Make a local copy of exit_status to keep the Windows code
+	// thread safe. At this point it is fine if we miss the user
+	// pressing C-c and don't set the exit_status to E_ERROR on
+	// Windows.
+#if defined(_WIN32) && !defined(__CYGWIN__)
+	EnterCriticalSection(&exit_status_cs);
+#endif
+
+	enum exit_status_type es = exit_status;
+
+#if defined(_WIN32) && !defined(__CYGWIN__)
+	LeaveCriticalSection(&exit_status_cs);
+#endif
+
+	// Suppress the exit status indicating a warning if --no-warn
+	// was specified.
+	if (es == E_WARNING && no_warn)
+		es = E_SUCCESS;
+
+	tuklib_exit(es, E_ERROR, message_verbosity_get() != V_SILENT);
 }

@@ -15,7 +15,7 @@
 
 
 extern LZMA_API(lzma_ret)
-lzma_block_compressed_size(lzma_block *block, lzma_vli total_size)
+lzma_block_compressed_size(lzma_block *block, lzma_vli unpadded_size)
 {
 	// Validate everything but Uncompressed Size and filters.
 	if (lzma_block_unpadded_size(block) == 0)
@@ -25,13 +25,13 @@ lzma_block_compressed_size(lzma_block *block, lzma_vli total_size)
 			+ lzma_check_size(block->check);
 
 	// Validate that Compressed Size will be greater than zero.
-	if (container_size <= total_size)
+	if (unpadded_size <= container_size)
 		return LZMA_DATA_ERROR;
 
 	// Calculate what Compressed Size is supposed to be.
 	// If Compressed Size was present in Block Header,
 	// compare that the new value matches it.
-	const lzma_vli compressed_size = total_size - container_size;
+	const lzma_vli compressed_size = unpadded_size - container_size;
 	if (block->compressed_size != LZMA_VLI_UNKNOWN
 			&& block->compressed_size != compressed_size)
 		return LZMA_DATA_ERROR;
@@ -51,7 +51,7 @@ lzma_block_unpadded_size(const lzma_block *block)
 	// NOTE: This function is used for validation too, so it is
 	// essential that these checks are always done even if
 	// Compressed Size is unknown.
-	if (block == NULL || block->version != 0
+	if (block == NULL || block->version > 1
 			|| block->header_size < LZMA_BLOCK_HEADER_SIZE_MIN
 			|| block->header_size > LZMA_BLOCK_HEADER_SIZE_MAX
 			|| (block->header_size & 3)

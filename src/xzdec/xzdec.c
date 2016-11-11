@@ -18,13 +18,14 @@
 #include <stdio.h>
 #include <unistd.h>
 
-#ifdef DOSLIKE
+#include "getopt.h"
+#include "tuklib_progname.h"
+#include "tuklib_exit.h"
+
+#ifdef TUKLIB_DOSLIKE
 #	include <fcntl.h>
 #	include <io.h>
 #endif
-
-#include "getopt.h"
-#include "physmem.h"
 
 
 #ifdef LZMADEC
@@ -34,25 +35,19 @@
 #endif
 
 
-/// Number of bytes to use memory at maximum
-static uint64_t memlimit;
-
 /// Error messages are suppressed if this is zero, which is the case when
 /// --quiet has been given at least twice.
 static unsigned int display_errors = 2;
 
-/// Program name to be shown in error messages
-static const char *argv0;
 
-
-static void lzma_attribute((format(printf, 1, 2)))
+static void lzma_attribute((__format__(__printf__, 1, 2)))
 my_errorf(const char *fmt, ...)
 {
 	va_list ap;
 	va_start(ap, fmt);
 
 	if (display_errors) {
-		fprintf(stderr, "%s: ", argv0);
+		fprintf(stderr, "%s: ", progname);
 		vfprintf(stderr, fmt, ap);
 		fprintf(stderr, "\n");
 	}
@@ -62,169 +57,37 @@ my_errorf(const char *fmt, ...)
 }
 
 
-static void lzma_attribute((noreturn))
-my_exit(void)
-{
-	int status = EXIT_SUCCESS;
-
-	// Close stdout. We don't care about stderr, because we write to it
-	// only when an error has already occurred.
-	const int ferror_err = ferror(stdout);
-	const int fclose_err = fclose(stdout);
-
-	if (ferror_err || fclose_err) {
-		// If it was fclose() that failed, we have the reason
-		// in errno. If only ferror() indicated an error,
-		// we have no idea what the reason was.
-		my_errorf("Writing to standard output failed: %s", fclose_err
-				? strerror(errno) : "Unknown error");
-		status = EXIT_FAILURE;
-	}
-
-	exit(status);
-}
-
-
-static void lzma_attribute((noreturn))
+static void lzma_attribute((__noreturn__))
 help(void)
 {
 	printf(
 "Usage: %s [OPTION]... [FILE]...\n"
-"Uncompress files in the ." TOOL_FORMAT " format to the standard output.\n"
+"Decompress files in the ." TOOL_FORMAT " format to standard output.\n"
 "\n"
-"  -c, --stdout       (ignored)\n"
-"  -d, --decompress   (ignored)\n"
-"  -k, --keep         (ignored)\n"
-"  -M, --memory=NUM   use NUM bytes of memory at maximum (0 means default)\n"
+"  -d, --decompress   (ignored, only decompression is supported)\n"
+"  -k, --keep         (ignored, files are never deleted)\n"
+"  -c, --stdout       (ignored, output is always written to standard output)\n"
 "  -q, --quiet        specify *twice* to suppress errors\n"
-"  -Q, --no-warn      (ignored)\n"
+"  -Q, --no-warn      (ignored, the exit status 2 is never used)\n"
 "  -h, --help         display this help and exit\n"
 "  -V, --version      display the version number and exit\n"
 "\n"
 "With no FILE, or when FILE is -, read standard input.\n"
 "\n"
-"On this system and configuration, this program will use at maximum of roughly\n"
-"%" PRIu64 " MiB RAM.\n"
-"\n"
 "Report bugs to <" PACKAGE_BUGREPORT "> (in English or Finnish).\n"
-PACKAGE_NAME " home page: <" PACKAGE_HOMEPAGE ">\n",
-		argv0, memlimit / (1024 * 1024));
-	my_exit();
+PACKAGE_NAME " home page: <" PACKAGE_URL ">\n", progname);
+
+	tuklib_exit(EXIT_SUCCESS, EXIT_FAILURE, display_errors);
 }
 
 
-static void lzma_attribute((noreturn))
+static void lzma_attribute((__noreturn__))
 version(void)
 {
 	printf(TOOL_FORMAT "dec (" PACKAGE_NAME ") " LZMA_VERSION_STRING "\n"
 			"liblzma %s\n", lzma_version_string());
 
-	my_exit();
-}
-
-
-/// Find out the amount of physical memory (RAM) in the system, and set
-/// the memory usage limit to the given percentage of RAM.
-static void
-memlimit_set_percentage(uint32_t percentage)
-{
-	uint64_t mem = physmem();
-
-	// If we cannot determine the amount of RAM, assume 32 MiB.
-	if (mem == 0)
-		mem = UINT64_C(32) * 1024 * 1024;
-
-	memlimit = percentage * mem / 100;
-	return;
-}
-
-
-/// Set the memory usage limit to give number of bytes. Zero is a special
-/// value to indicate the default limit.
-static void
-memlimit_set(uint64_t new_memlimit)
-{
-	if (new_memlimit == 0)
-		memlimit_set_percentage(40);
-	else
-		memlimit = new_memlimit;
-
-	return;
-}
-
-
-/// \brief      Convert a string to uint64_t
-///
-/// This is rudely copied from src/xz/util.c and modified a little. :-(
-///
-/// \param      max     Return value when the string "max" was specified.
-///
-static uint64_t
-str_to_uint64(const char *value, uint64_t max)
-{
-	uint64_t result = 0;
-
-	// Accept special value "max".
-	if (strcmp(value, "max") == 0)
-		return max;
-
-	if (*value < '0' || *value > '9') {
-		my_errorf("%s: Value is not a non-negative decimal integer",
-				value);
-		exit(EXIT_FAILURE);
-	}
-
-	do {
-		// Don't overflow.
-		if (result > (UINT64_MAX - 9) / 10)
-			return UINT64_MAX;
-
-		result *= 10;
-		result += *value - '0';
-		++value;
-	} while (*value >= '0' && *value <= '9');
-
-	if (*value != '\0') {
-		// Look for suffix.
-		static const struct {
-			const char name[4];
-			uint32_t multiplier;
-		} suffixes[] = {
-			{ "k",   1000 },
-			{ "kB",  1000 },
-			{ "M",   1000000 },
-			{ "MB",  1000000 },
-			{ "G",   1000000000 },
-			{ "GB",  1000000000 },
-			{ "Ki",  1024 },
-			{ "KiB", 1024 },
-			{ "Mi",  1048576 },
-			{ "MiB", 1048576 },
-			{ "Gi",  1073741824 },
-			{ "GiB", 1073741824 }
-		};
-
-		uint32_t multiplier = 0;
-		for (size_t i = 0; i < ARRAY_SIZE(suffixes); ++i) {
-			if (strcmp(value, suffixes[i].name) == 0) {
-				multiplier = suffixes[i].multiplier;
-				break;
-			}
-		}
-
-		if (multiplier == 0) {
-			my_errorf("%s: Invalid suffix", value);
-			exit(EXIT_FAILURE);
-		}
-
-		// Don't overflow here either.
-		if (result > UINT64_MAX / multiplier)
-			result = UINT64_MAX;
-		else
-			result *= multiplier;
-	}
-
-	return result;
+	tuklib_exit(EXIT_SUCCESS, EXIT_FAILURE, display_errors);
 }
 
 
@@ -239,7 +102,6 @@ parse_options(int argc, char **argv)
 		{ "decompress",   no_argument,         NULL, 'd' },
 		{ "uncompress",   no_argument,         NULL, 'd' },
 		{ "keep",         no_argument,         NULL, 'k' },
-		{ "memory",       required_argument,   NULL, 'M' },
 		{ "quiet",        no_argument,         NULL, 'q' },
 		{ "no-warn",      no_argument,         NULL, 'Q' },
 		{ "help",         no_argument,         NULL, 'h' },
@@ -257,31 +119,6 @@ parse_options(int argc, char **argv)
 		case 'k':
 		case 'Q':
 			break;
-
-		case 'M': {
-			// Support specifying the limit as a percentage of
-			// installed physical RAM.
-			const size_t len = strlen(optarg);
-			if (len > 0 && optarg[len - 1] == '%') {
-				// Memory limit is a percentage of total
-				// installed RAM.
-				optarg[len - 1] = '\0';
-				const uint64_t percentage
-						= str_to_uint64(optarg, 100);
-				if (percentage < 1 || percentage > 100) {
-					my_errorf("Percentage must be in "
-							"the range [1, 100]");
-					exit(EXIT_FAILURE);
-				}
-
-				memlimit_set_percentage(percentage);
-			} else {
-				memlimit_set(str_to_uint64(
-						optarg, UINT64_MAX));
-			}
-
-			break;
-		}
 
 		case 'q':
 			if (display_errors > 0)
@@ -311,13 +148,12 @@ uncompress(lzma_stream *strm, FILE *file, const char *filename)
 
 	// Initialize the decoder
 #ifdef LZMADEC
-	ret = lzma_alone_decoder(strm, memlimit);
+	ret = lzma_alone_decoder(strm, UINT64_MAX);
 #else
-	ret = lzma_stream_decoder(strm, memlimit, LZMA_CONCATENATED);
+	ret = lzma_stream_decoder(strm, UINT64_MAX, LZMA_CONCATENATED);
 #endif
 
 	// The only reasonable error here is LZMA_MEM_ERROR.
-	// FIXME: Maybe also LZMA_MEMLIMIT_ERROR in future?
 	if (ret != LZMA_OK) {
 		my_errorf("%s", ret == LZMA_MEM_ERROR ? strerror(ENOMEM)
 				: "Internal error (bug)");
@@ -405,10 +241,6 @@ uncompress(lzma_stream *strm, FILE *file, const char *filename)
 				msg = strerror(ENOMEM);
 				break;
 
-			case LZMA_MEMLIMIT_ERROR:
-				msg = "Memory usage limit reached";
-				break;
-
 			case LZMA_FORMAT_ERROR:
 				msg = "File format not recognized";
 				break;
@@ -441,13 +273,8 @@ uncompress(lzma_stream *strm, FILE *file, const char *filename)
 int
 main(int argc, char **argv)
 {
-	// Set the argv0 global so that we can print the command name in
-	// error and help messages.
-	argv0 = argv[0];
-
-	// Set the default memory usage limit. This is needed before parsing
-	// the command line arguments.
-	memlimit_set(0);
+	// Initialize progname which we will be used in error messages.
+	tuklib_progname_init(argv);
 
 	// Parse the command line options.
 	parse_options(argc, argv);
@@ -458,7 +285,7 @@ main(int argc, char **argv)
 	lzma_stream strm = LZMA_STREAM_INIT;
 
 	// Some systems require setting stdin and stdout to binary mode.
-#ifdef DOSLIKE
+#ifdef TUKLIB_DOSLIKE
 	setmode(fileno(stdin), O_BINARY);
 	setmode(fileno(stdout), O_BINARY);
 #endif
@@ -492,5 +319,5 @@ main(int argc, char **argv)
 	lzma_end(&strm);
 #endif
 
-	my_exit();
+	tuklib_exit(EXIT_SUCCESS, EXIT_FAILURE, display_errors);
 }

@@ -67,6 +67,10 @@ lzma2_decode(lzma_coder *restrict coder, lzma_dict *restrict dict,
 		const uint32_t control = in[*in_pos];
 		++*in_pos;
 
+		// End marker
+		if (control == 0x00)
+			return LZMA_STREAM_END;
+
 		if (control >= 0xE0 || control == 1) {
 			// Dictionary reset implies that next LZMA chunk has
 			// to set new properties.
@@ -104,10 +108,6 @@ lzma2_decode(lzma_coder *restrict coder, lzma_dict *restrict dict,
 							&coder->options);
 			}
 		} else {
-			// End marker
-			if (control == 0x00)
-				return LZMA_STREAM_END;
-
 			// Invalid control values
 			if (control > 2)
 				return LZMA_DATA_ERROR;
@@ -191,7 +191,6 @@ lzma2_decode(lzma_coder *restrict coder, lzma_dict *restrict dict,
 
 	case SEQ_COPY: {
 		// Copy from input to the dictionary as is.
-		// FIXME Can copy too much?
 		dict_write(dict, in, in_pos, in_size, &coder->compressed_size);
 		if (coder->compressed_size != 0)
 			return LZMA_OK;
@@ -210,7 +209,7 @@ lzma2_decode(lzma_coder *restrict coder, lzma_dict *restrict dict,
 
 
 static void
-lzma2_decoder_end(lzma_coder *coder, lzma_allocator *allocator)
+lzma2_decoder_end(lzma_coder *coder, const lzma_allocator *allocator)
 {
 	assert(coder->lzma.end == NULL);
 	lzma_free(coder->lzma.coder, allocator);
@@ -222,7 +221,7 @@ lzma2_decoder_end(lzma_coder *coder, lzma_allocator *allocator)
 
 
 static lzma_ret
-lzma2_decoder_init(lzma_lz_decoder *lz, lzma_allocator *allocator,
+lzma2_decoder_init(lzma_lz_decoder *lz, const lzma_allocator *allocator,
 		const void *opt, lzma_lz_options *lz_options)
 {
 	if (lz->coder == NULL) {
@@ -249,7 +248,7 @@ lzma2_decoder_init(lzma_lz_decoder *lz, lzma_allocator *allocator,
 
 
 extern lzma_ret
-lzma_lzma2_decoder_init(lzma_next_coder *next, lzma_allocator *allocator,
+lzma_lzma2_decoder_init(lzma_next_coder *next, const lzma_allocator *allocator,
 		const lzma_filter_info *filters)
 {
 	// LZMA2 can only be the last filter in the chain. This is enforced
@@ -270,7 +269,7 @@ lzma_lzma2_decoder_memusage(const void *options)
 
 
 extern lzma_ret
-lzma_lzma2_props_decode(void **options, lzma_allocator *allocator,
+lzma_lzma2_props_decode(void **options, const lzma_allocator *allocator,
 		const uint8_t *props, size_t props_size)
 {
 	if (props_size != 1)

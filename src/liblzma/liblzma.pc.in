@@ -12,8 +12,8 @@ includedir=@includedir@
 
 Name: liblzma
 Description: General purpose data compression library
-URL: @PACKAGE_HOMEPAGE@
+URL: @PACKAGE_URL@
 Version: @PACKAGE_VERSION@
 Cflags: -I${includedir}
 Libs: -L${libdir} -llzma
-Libs.private: @PTHREAD_CFLAGS@ @PTHREAD_LIBS@
+Libs.private: @PTHREAD_CFLAGS@ @LIBS@

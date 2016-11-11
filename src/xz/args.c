@@ -21,18 +21,106 @@
 bool opt_stdout = false;
 bool opt_force = false;
 bool opt_keep_original = false;
+bool opt_robot = false;
+bool opt_ignore_check = false;
 
 // We don't modify or free() this, but we need to assign it in some
 // non-const pointers.
-const char *stdin_filename = "(stdin)";
+const char stdin_filename[] = "(stdin)";
+
+
+/// Parse and set the memory usage limit for compression and/or decompression.
+static void
+parse_memlimit(const char *name, const char *name_percentage, char *str,
+		bool set_compress, bool set_decompress)
+{
+	bool is_percentage = false;
+	uint64_t value;
+
+	const size_t len = strlen(str);
+	if (len > 0 && str[len - 1] == '%') {
+		str[len - 1] = '\0';
+		is_percentage = true;
+		value = str_to_uint64(name_percentage, str, 1, 100);
+	} else {
+		// On 32-bit systems, SIZE_MAX would make more sense than
+		// UINT64_MAX. But use UINT64_MAX still so that scripts
+		// that assume > 4 GiB values don't break.
+		value = str_to_uint64(name, str, 0, UINT64_MAX);
+	}
+
+	hardware_memlimit_set(
+			value, set_compress, set_decompress, is_percentage);
+	return;
+}
+
+
+static void
+parse_block_list(char *str)
+{
+	// It must be non-empty and not begin with a comma.
+	if (str[0] == '\0' || str[0] == ',')
+		message_fatal(_("%s: Invalid argument to --block-list"), str);
+
+	// Count the number of comma-separated strings.
+	size_t count = 1;
+	for (size_t i = 0; str[i] != '\0'; ++i)
+		if (str[i] == ',')
+			++count;
+
+	// Prevent an unlikely integer overflow.
+	if (count > SIZE_MAX / sizeof(uint64_t) - 1)
+		message_fatal(_("%s: Too many arguments to --block-list"),
+				str);
+
+	// Allocate memory to hold all the sizes specified.
+	// If --block-list was specified already, its value is forgotten.
+	free(opt_block_list);
+	opt_block_list = xmalloc((count + 1) * sizeof(uint64_t));
+
+	for (size_t i = 0; i < count; ++i) {
+		// Locate the next comma and replace it with \0.
+		char *p = strchr(str, ',');
+		if (p != NULL)
+			*p = '\0';
+
+		if (str[0] == '\0') {
+			// There is no string, that is, a comma follows
+			// another comma. Use the previous value.
+			//
+			// NOTE: We checked earler that the first char
+			// of the whole list cannot be a comma.
+			assert(i > 0);
+			opt_block_list[i] = opt_block_list[i - 1];
+		} else {
+			opt_block_list[i] = str_to_uint64("block-list", str,
+					0, UINT64_MAX);
+
+			// Zero indicates no more new Blocks.
+			if (opt_block_list[i] == 0) {
+				if (i + 1 != count)
+					message_fatal(_("0 can only be used "
+							"as the last element "
+							"in --block-list"));
+
+				opt_block_list[i] = UINT64_MAX;
+			}
+		}
+
+		str = p + 1;
+	}
+
+	// Terminate the array.
+	opt_block_list[count] = 0;
+	return;
+}
 
 
 static void
 parse_real(args_info *args, int argc, char **argv)
 {
 	enum {
-		OPT_SUBBLOCK = INT_MIN,
-		OPT_X86,
+		OPT_X86 = INT_MIN,
 		OPT_POWERPC,
 		OPT_IA64,
 		OPT_ARM,
@@ -42,8 +130,19 @@ parse_real(args_info *args, int argc, char **argv)
 		OPT_LZMA1,
 		OPT_LZMA2,
 
+		OPT_SINGLE_STREAM,
+		OPT_NO_SPARSE,
 		OPT_FILES,
 		OPT_FILES0,
+		OPT_BLOCK_SIZE,
+		OPT_BLOCK_LIST,
+		OPT_MEM_COMPRESS,
+		OPT_MEM_DECOMPRESS,
+		OPT_NO_ADJUST,
+		OPT_INFO_MEMORY,
+		OPT_ROBOT,
+		OPT_FLUSH_TIMEOUT,
+		OPT_IGNORE_CHECK,
 	};
 
 	static const char short_opts[]
@@ -51,53 +150,64 @@ parse_real(args_info *args, int argc, char **argv)
 
 	static const struct option long_opts[] = {
 		// Operation mode
-		{ "compress",       no_argument,       NULL,  'z' },
-		{ "decompress",     no_argument,       NULL,  'd' },
-		{ "uncompress",     no_argument,       NULL,  'd' },
-		{ "test",           no_argument,       NULL,  't' },
-		{ "list",           no_argument,       NULL,  'l' },
+		{ "compress",     no_argument,       NULL,  'z' },
+		{ "decompress",   no_argument,       NULL,  'd' },
+		{ "uncompress",   no_argument,       NULL,  'd' },
+		{ "test",         no_argument,       NULL,  't' },
+		{ "list",         no_argument,       NULL,  'l' },
 
 		// Operation modifiers
-		{ "keep",           no_argument,       NULL,  'k' },
-		{ "force",          no_argument,       NULL,  'f' },
-		{ "stdout",         no_argument,       NULL,  'c' },
-		{ "to-stdout",      no_argument,       NULL,  'c' },
-		{ "suffix",         required_argument, NULL,  'S' },
+		{ "keep",         no_argument,       NULL,  'k' },
+		{ "force",        no_argument,       NULL,  'f' },
+		{ "stdout",       no_argument,       NULL,  'c' },
+		{ "to-stdout",    no_argument,       NULL,  'c' },
+		{ "single-stream", no_argument,      NULL,  OPT_SINGLE_STREAM },
+		{ "no-sparse",    no_argument,       NULL,  OPT_NO_SPARSE },
+		{ "suffix",       required_argument, NULL,  'S' },
 		// { "recursive",      no_argument,       NULL,  'r' }, // TODO
-		{ "files",          optional_argument, NULL,  OPT_FILES },
-		{ "files0",         optional_argument, NULL,  OPT_FILES0 },
+		{ "files",        optional_argument, NULL,  OPT_FILES },
+		{ "files0",       optional_argument, NULL,  OPT_FILES0 },
 
 		// Basic compression settings
-		{ "format",         required_argument, NULL,  'F' },
-		{ "check",          required_argument, NULL,  'C' },
-		{ "memory",         required_argument, NULL,  'M' },
-		{ "threads",        required_argument, NULL,  'T' },
+		{ "format",       required_argument, NULL,  'F' },
+		{ "check",        required_argument, NULL,  'C' },
+		{ "ignore-check", no_argument,       NULL,  OPT_IGNORE_CHECK },
+		{ "block-size",   required_argument, NULL,  OPT_BLOCK_SIZE },
+		{ "block-list",  required_argument, NULL,  OPT_BLOCK_LIST },
+		{ "memlimit-compress",   required_argument, NULL, OPT_MEM_COMPRESS },
+		{ "memlimit-decompress", required_argument, NULL, OPT_MEM_DECOMPRESS },
+		{ "memlimit",     required_argument, NULL,  'M' },
+		{ "memory",       required_argument, NULL,  'M' }, // Old alias
+		{ "no-adjust",    no_argument,       NULL,  OPT_NO_ADJUST },
+		{ "threads",      required_argument, NULL,  'T' },
+		{ "flush-timeout", required_argument, NULL, OPT_FLUSH_TIMEOUT },
 
-		{ "extreme",        no_argument,       NULL,  'e' },
-		{ "fast",           no_argument,       NULL,  '0' },
-		{ "best",           no_argument,       NULL,  '9' },
+		{ "extreme",      no_argument,       NULL,  'e' },
+		{ "fast",         no_argument,       NULL,  '0' },
+		{ "best",         no_argument,       NULL,  '9' },
 
 		// Filters
-		{ "lzma1",          optional_argument, NULL,  OPT_LZMA1 },
-		{ "lzma2",          optional_argument, NULL,  OPT_LZMA2 },
-		{ "x86",            optional_argument, NULL,  OPT_X86 },
-		{ "powerpc",        optional_argument, NULL,  OPT_POWERPC },
-		{ "ia64",           optional_argument, NULL,  OPT_IA64 },
-		{ "arm",            optional_argument, NULL,  OPT_ARM },
-		{ "armthumb",       optional_argument, NULL,  OPT_ARMTHUMB },
-		{ "sparc",          optional_argument, NULL,  OPT_SPARC },
-		{ "delta",          optional_argument, NULL,  OPT_DELTA },
-		{ "subblock",       optional_argument, NULL,  OPT_SUBBLOCK },
+		{ "lzma1",        optional_argument, NULL,  OPT_LZMA1 },
+		{ "lzma2",        optional_argument, NULL,  OPT_LZMA2 },
+		{ "x86",          optional_argument, NULL,  OPT_X86 },
+		{ "powerpc",      optional_argument, NULL,  OPT_POWERPC },
+		{ "ia64",         optional_argument, NULL,  OPT_IA64 },
+		{ "arm",          optional_argument, NULL,  OPT_ARM },
+		{ "armthumb",     optional_argument, NULL,  OPT_ARMTHUMB },
+		{ "sparc",        optional_argument, NULL,  OPT_SPARC },
+		{ "delta",        optional_argument, NULL,  OPT_DELTA },
 
 		// Other options
-		{ "quiet",          no_argument,       NULL,  'q' },
-		{ "verbose",        no_argument,       NULL,  'v' },
-		{ "no-warn",        no_argument,       NULL,  'Q' },
-		{ "help",           no_argument,       NULL,  'h' },
-		{ "long-help",      no_argument,       NULL,  'H' },
-		{ "version",        no_argument,       NULL,  'V' },
+		{ "quiet",        no_argument,       NULL,  'q' },
+		{ "verbose",      no_argument,       NULL,  'v' },
+		{ "no-warn",      no_argument,       NULL,  'Q' },
+		{ "robot",        no_argument,       NULL,  OPT_ROBOT },
+		{ "info-memory",  no_argument,       NULL,  OPT_INFO_MEMORY },
+		{ "help",         no_argument,       NULL,  'h' },
+		{ "long-help",    no_argument,       NULL,  'H' },
+		{ "version",      no_argument,       NULL,  'V' },
 
-		{ NULL,                 0,                 NULL,   0 }
+		{ NULL,           0,                 NULL,   0 }
 	};
 
 	int c;
@@ -111,28 +221,25 @@ parse_real(args_info *args, int argc, char **argv)
 			coder_set_preset(c - '0');
 			break;
 
-		// --memory
-		case 'M': {
-			// Support specifying the limit as a percentage of
-			// installed physical RAM.
-			size_t len = strlen(optarg);
-			if (len > 0 && optarg[len - 1] == '%') {
-				optarg[len - 1] = '\0';
-				hardware_memlimit_set_percentage(
-						str_to_uint64(
-						"memory%", optarg, 1, 100));
-			} else {
-				// On 32-bit systems, SIZE_MAX would make more
-				// sense than UINT64_MAX. But use UINT64_MAX
-				// still so that scripts that assume > 4 GiB
-				// values don't break.
-				hardware_memlimit_set(str_to_uint64(
-						"memory", optarg,
-						0, UINT64_MAX));
-			}
-
+		// --memlimit-compress
+		case OPT_MEM_COMPRESS:
+			parse_memlimit("memlimit-compress",
+					"memlimit-compress%", optarg,
+					true, false);
 			break;
-		}
+
+		// --memlimit-decompress
+		case OPT_MEM_DECOMPRESS:
+			parse_memlimit("memlimit-decompress",
+					"memlimit-decompress%", optarg,
+					false, true);
+			break;
+
+		// --memlimit
+		case 'M':
+			parse_memlimit("memlimit", "memlimit%", optarg,
+					true, true);
+			break;
 
 		// --suffix
 		case 'S':
@@ -140,8 +247,9 @@ parse_real(args_info *args, int argc, char **argv)
 			break;
 
 		case 'T':
-			hardware_threadlimit_set(str_to_uint64(
-					"threads", optarg, 0, UINT32_MAX));
+			// The max is from src/liblzma/common/common.h.
+			hardware_threads_set(str_to_uint64("threads",
+					optarg, 0, 16384));
 			break;
 
 		// --version
@@ -168,6 +276,11 @@ parse_real(args_info *args, int argc, char **argv)
 		case 'f':
 			opt_force = true;
 			break;
+
+		// --info-memory
+		case OPT_INFO_MEMORY:
+			// This doesn't return.
+			hardware_memlimit_show();
 
 		// --help
 		case 'h':
@@ -207,16 +320,20 @@ parse_real(args_info *args, int argc, char **argv)
 			message_verbosity_increase();
 			break;
 
+		// --robot
+		case OPT_ROBOT:
+			opt_robot = true;
+
+			// This is to make sure that floating point numbers
+			// always have a dot as decimal separator.
+			setlocale(LC_NUMERIC, "C");
+			break;
+
 		case 'z':
 			opt_mode = MODE_COMPRESS;
 			break;
 
 		// Filter setup
-
-		case OPT_SUBBLOCK:
-			coder_add_filter(LZMA_FILTER_SUBBLOCK,
-					options_subblock(optarg));
-			break;
 
 		case OPT_X86:
 			coder_add_filter(LZMA_FILTER_X86,
@@ -324,6 +441,28 @@ parse_real(args_info *args, int argc, char **argv)
 			break;
 		}
 
+		case OPT_IGNORE_CHECK:
+			opt_ignore_check = true;
+			break;
+
+		case OPT_BLOCK_SIZE:
+			opt_block_size = str_to_uint64("block-size", optarg,
+					0, LZMA_VLI_MAX);
+			break;
+
+		case OPT_BLOCK_LIST: {
+			parse_block_list(optarg);
+			break;
+		}
+
+		case OPT_SINGLE_STREAM:
+			opt_single_stream = true;
+			break;
+
+		case OPT_NO_SPARSE:
+			io_no_sparse();
+			break;
+
 		case OPT_FILES:
 			args->files_delim = '\n';
 
@@ -332,7 +471,7 @@ parse_real(args_info *args, int argc, char **argv)
 		case OPT_FILES0:
 			if (args->files_name != NULL)
 				message_fatal(_("Only one file can be "
-						"specified with `--files'"
+						"specified with `--files' "
 						"or `--files0'."));
 
 			if (optarg == NULL) {
@@ -349,9 +488,18 @@ parse_real(args_info *args, int argc, char **argv)
 
 			break;
 
+		case OPT_NO_ADJUST:
+			opt_auto_adjust = false;
+			break;
+
+		case OPT_FLUSH_TIMEOUT:
+			opt_flush_timeout = str_to_uint64("flush-timeout",
+					optarg, 0, UINT64_MAX);
+			break;
+
 		default:
 			message_try_help();
-			my_exit(E_ERROR);
+			tuklib_exit(E_ERROR, E_ERROR, false);
 		}
 	}
 
@@ -360,9 +508,9 @@ parse_real(args_info *args, int argc, char **argv)
 
 
 static void
-parse_environment(args_info *args, char *argv0)
+parse_environment(args_info *args, char *argv0, const char *varname)
 {
-	char *env = getenv("XZ_OPT");
+	char *env = getenv(varname);
 	if (env == NULL)
 		return;
 
@@ -386,12 +534,13 @@ parse_environment(args_info *args, char *argv0)
 		} else if (prev_was_space) {
 			prev_was_space = false;
 
-			// Keep argc small enough to fit into a singed int
+			// Keep argc small enough to fit into a signed int
 			// and to keep it usable for memory allocation.
-			if (++argc == MIN(INT_MAX, SIZE_MAX / sizeof(char *)))
+			if (++argc == my_min(
+					INT_MAX, SIZE_MAX / sizeof(char *)))
 				message_fatal(_("The environment variable "
-						"XZ_OPT contains too many "
-						"arguments"));
+						"%s contains too many "
+						"arguments"), varname);
 		}
 	}
 
@@ -449,18 +598,12 @@ args_parse(args_info *args, int argc, char **argv)
 
 	// Check how we were called.
 	{
-#ifdef DOSLIKE
-		// We adjusted argv[0] in the beginning of main() so we don't
-		// need to do anything here.
-		const char *name = argv[0];
-#else
 		// Remove the leading path name, if any.
 		const char *name = strrchr(argv[0], '/');
 		if (name == NULL)
 			name = argv[0];
 		else
 			++name;
-#endif
 
 		// NOTE: It's possible that name[0] is now '\0' if argv[0]
 		// is weird, but it doesn't matter here.
@@ -485,8 +628,9 @@ args_parse(args_info *args, int argc, char **argv)
 		}
 	}
 
-	// First the flags from environment
-	parse_environment(args, argv[0]);
+	// First the flags from the environment
+	parse_environment(args, argv[0], "XZ_DEFAULTS");
+	parse_environment(args, argv[0], "XZ_OPT");
 
 	// Then from the command line
 	parse_real(args, argc, argv);
@@ -528,3 +672,13 @@ args_parse(args_info *args, int argc, char **argv)
 
 	return;
 }
+
+
+#ifndef NDEBUG
+extern void
+args_free(void)
+{
+	free(opt_block_list);
+	return;
+}
+#endif

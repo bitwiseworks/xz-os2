@@ -4,22 +4,23 @@
 .\"
 .\" License: GNU GPLv2+
 .\"
-.TH XZMORE 1 "2009-07-05" "Tukaani" "XZ Utils"
+.TH XZMORE 1 "2013-06-30" "Tukaani" "XZ Utils"
 .SH NAME
 xzmore, lzmore \- view xz or lzma compressed (text) files
 .SH SYNOPSIS
 .B xzmore
-.RI [ "filename ..."  ]
+.RI [ file... ]
 .br
 .B lzmore
-.RI [ "filename ..."  ]
+.RI [ file... ]
 .SH DESCRIPTION
 .B  xzmore
 is a filter which allows examination of
 .BR xz (1)
 or
 .BR lzma (1)
-compressed text files one screenful at a time on a soft-copy terminal.
+compressed text files one screenful at a time
+on a soft-copy terminal.
 .PP
 To use a pager other than the default
 .B more,
@@ -31,14 +32,14 @@ The name
 is provided for backward compatibility with LZMA Utils.
 .TP
 .BR e " or " q
-When the prompt --More--(Next file:
+When the prompt \-\-More\-\-(Next file:
 .IR file )
 is printed, this command causes
 .B xzmore
 to exit.
 .TP
 .B s
-When the prompt --More--(Next file:
+When the prompt \-\-More\-\-(Next file:
 .IR file )
 is printed, this command causes
 .B xzmore
