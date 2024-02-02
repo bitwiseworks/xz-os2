@@ -142,6 +142,20 @@ read_name(const args_info *args)
 int
 main(int argc, char **argv)
 {
+#ifdef HAVE_PLEDGE
+	// OpenBSD's pledge(2) sandbox
+	//
+	// Unconditionally enable sandboxing with fairly relaxed promises.
+	// This is still way better than having no sandbox at all. :-)
+	// More strict promises will be made later in file_io.c if possible.
+	if (pledge("stdio rpath wpath cpath fattr", "")) {
+		// Don't translate the string or use message_fatal() as
+		// those haven't been initialized yet.
+		fprintf(stderr, "%s: Failed to enable the sandbox\n", argv[0]);
+		return E_ERROR;
+	}
+#endif
+
 #if defined(_WIN32) && !defined(__CYGWIN__)
 	InitializeCriticalSection(&exit_status_cs);
 #endif
@@ -159,7 +173,7 @@ main(int argc, char **argv)
 	// Initialize handling of error/warning/other messages.
 	message_init();
 
-	// Set hardware-dependent default values. These can be overriden
+	// Set hardware-dependent default values. These can be overridden
 	// on the command line, thus this must be done before args_parse().
 	hardware_init();
 
@@ -326,5 +340,5 @@ main(int argc, char **argv)
 	if (es == E_WARNING && no_warn)
 		es = E_SUCCESS;
 
-	tuklib_exit(es, E_ERROR, message_verbosity_get() != V_SILENT);
+	tuklib_exit((int)es, E_ERROR, message_verbosity_get() != V_SILENT);
 }

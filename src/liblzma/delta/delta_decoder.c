@@ -42,7 +42,12 @@ delta_decode(void *coder_ptr, const lzma_allocator *allocator,
 			in, in_pos, in_size, out, out_pos, out_size,
 			action);
 
-	decode_buffer(coder, out + out_start, *out_pos - out_start);
+	// out might be NULL. In that case size == 0. Null pointer + 0 is
+	// undefined behavior so skip the call in that case as it would
+	// do nothing anyway.
+	const size_t size = *out_pos - out_start;
+	if (size > 0)
+		decode_buffer(coder, out + out_start, size);
 
 	return ret;
 }
@@ -70,7 +75,7 @@ lzma_delta_props_decode(void **options, const lzma_allocator *allocator,
 		return LZMA_MEM_ERROR;
 
 	opt->type = LZMA_DELTA_TYPE_BYTE;
-	opt->dist = props[0] + 1;
+	opt->dist = props[0] + 1U;
 
 	*options = opt;
 

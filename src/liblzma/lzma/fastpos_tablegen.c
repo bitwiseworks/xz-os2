@@ -11,9 +11,10 @@
 //
 ///////////////////////////////////////////////////////////////////////////////
 
-#include <sys/types.h>
 #include <inttypes.h>
 #include <stdio.h>
+
+#define lzma_attr_visibility_hidden
 #include "fastpos.h"
 
 

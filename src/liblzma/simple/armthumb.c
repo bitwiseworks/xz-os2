@@ -23,10 +23,10 @@ armthumb_code(void *simple lzma_attribute((__unused__)),
 	for (i = 0; i + 4 <= size; i += 2) {
 		if ((buffer[i + 1] & 0xF8) == 0xF0
 				&& (buffer[i + 3] & 0xF8) == 0xF8) {
-			uint32_t src = ((buffer[i + 1] & 0x7) << 19)
-					| (buffer[i + 0] << 11)
-					| ((buffer[i + 3] & 0x7) << 8)
-					| (buffer[i + 2]);
+			uint32_t src = (((uint32_t)(buffer[i + 1]) & 7) << 19)
+				| ((uint32_t)(buffer[i + 0]) << 11)
+				| (((uint32_t)(buffer[i + 3]) & 7) << 8)
+				| (uint32_t)(buffer[i + 2]);
 
 			src <<= 1;
 
@@ -58,6 +58,7 @@ armthumb_coder_init(lzma_next_coder *next, const lzma_allocator *allocator,
 }
 
 
+#ifdef HAVE_ENCODER_ARMTHUMB
 extern lzma_ret
 lzma_simple_armthumb_encoder_init(lzma_next_coder *next,
 		const lzma_allocator *allocator,
@@ -65,8 +66,10 @@ lzma_simple_armthumb_encoder_init(lzma_next_coder *next,
 {
 	return armthumb_coder_init(next, allocator, filters, true);
 }
+#endif
 
 
+#ifdef HAVE_DECODER_ARMTHUMB
 extern lzma_ret
 lzma_simple_armthumb_decoder_init(lzma_next_coder *next,
 		const lzma_allocator *allocator,
@@ -74,3 +77,4 @@ lzma_simple_armthumb_decoder_init(lzma_next_coder *next,
 {
 	return armthumb_coder_init(next, allocator, filters, false);
 }
+#endif

@@ -1,6 +1,6 @@
 ///////////////////////////////////////////////////////////////////////////////
 //
-/// \file       filter_common.c
+/// \file       filter_common.h
 /// \brief      Filter-specific stuff common for both encoder and decoder
 //
 //  Author:     Lasse Collin
@@ -33,6 +33,9 @@ typedef struct {
 
 
 typedef const lzma_filter_coder *(*lzma_filter_find)(lzma_vli id);
+
+
+extern lzma_ret lzma_validate_chain(const lzma_filter *filters, size_t *count);
 
 
 extern lzma_ret lzma_raw_coder_init(
