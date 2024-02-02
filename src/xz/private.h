@@ -1,7 +1,7 @@
 ///////////////////////////////////////////////////////////////////////////////
 //
 /// \file       private.h
-/// \brief      Common includes, definions, and prototypes
+/// \brief      Common includes, definitions, and prototypes
 //
 //  Author:     Lasse Collin
 //
@@ -45,7 +45,7 @@
 #	define STDERR_FILENO (fileno(stderr))
 #endif
 
-#ifdef HAVE_CAPSICUM
+#if defined(HAVE_CAPSICUM) || defined(HAVE_PLEDGE)
 #	define ENABLE_SANDBOX 1
 #endif
 

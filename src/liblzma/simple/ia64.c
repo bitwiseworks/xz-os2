@@ -70,7 +70,7 @@ ia64_code(void *simple lzma_attribute((__unused__)),
 				inst_norm |= (uint64_t)(dest & 0x100000)
 						<< (36 - 20);
 
-				instruction &= (1 << bit_res) - 1;
+				instruction &= (1U << bit_res) - 1;
 				instruction |= (inst_norm << bit_res);
 
 				for (size_t j = 0; j < 6; j++)
@@ -94,6 +94,7 @@ ia64_coder_init(lzma_next_coder *next, const lzma_allocator *allocator,
 }
 
 
+#ifdef HAVE_ENCODER_IA64
 extern lzma_ret
 lzma_simple_ia64_encoder_init(lzma_next_coder *next,
 		const lzma_allocator *allocator,
@@ -101,8 +102,10 @@ lzma_simple_ia64_encoder_init(lzma_next_coder *next,
 {
 	return ia64_coder_init(next, allocator, filters, true);
 }
+#endif
 
 
+#ifdef HAVE_DECODER_IA64
 extern lzma_ret
 lzma_simple_ia64_decoder_init(lzma_next_coder *next,
 		const lzma_allocator *allocator,
@@ -110,3 +113,4 @@ lzma_simple_ia64_decoder_init(lzma_next_coder *next,
 {
 	return ia64_coder_init(next, allocator, filters, false);
 }
+#endif

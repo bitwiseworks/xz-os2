@@ -17,6 +17,7 @@
 	// This is to make liblzma produce the same output on big endian
 	// systems that it does on little endian systems. lz_encoder.c
 	// takes care of including the actual table.
+	lzma_attr_visibility_hidden
 	extern const uint32_t lzma_lz_hash_table[256];
 #	define hash_table lzma_lz_hash_table
 #else
@@ -39,7 +40,7 @@
 // Endianness doesn't matter in hash_2_calc() (no effect on the output).
 #ifdef TUKLIB_FAST_UNALIGNED_ACCESS
 #	define hash_2_calc() \
-		const uint32_t hash_value = *(const uint16_t *)(cur)
+		const uint32_t hash_value = read16ne(cur)
 #else
 #	define hash_2_calc() \
 		const uint32_t hash_value \
